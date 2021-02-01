@@ -39,16 +39,14 @@ who work for these customers to run queries on the data. In this project,I:
 ### 3. Streaming Data Analytics using Spark and HDFS
 In this project, I take on the roll of a data scientist at a game developmennt company. The company's latest mobile game has two events I'm interested in tracking: `buy a sword` & `join guild` and each has metadata characterstic of such events (i.e., sword type, guild name,etc). In this project, I:
 
-    - Instrument my API server to log events to Kafka
+   - Instrument my API server to log events to Kafka
 
-    - Assemble a data pipeline to catch these events: use Spark streaming to filter
-  select event types from Kafka, land them into HDFS/parquet to make them
-  available for analysis using Presto
+   - Assemble a data pipeline to catch these events: use Spark streaming to filterselect event types from Kafka, land them into      HDFS/parquet to make themavailable for analysis using Presto
 
    - Use Apache Bench to generate test data for my pipeline
 
    - Produce an analytics report where I provide a description of my pipeline
-  and some basic analysis of the events
+     and some basic analysis of the events
 
 Note: It's understood that events in this pipeline are _generated_ events which make
 them hard to connect to _actual_ business decisions.  However, it's an opportunnity for me to demonstrate an ability to plumb this pipeline end-to-end, which includes initially generating test data as well as submitting a notebook-based
