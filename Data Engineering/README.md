@@ -28,7 +28,7 @@ Findings:
 2. Because most bike trips are made by subscribers and most subscribers appear to be commuters that ride bikes for less than 30 minutes, I suggest either increasing the amount of the monthly or yearly membership fee or decreasing the amount of time per trip that is included as a part of the membership with no additional fee. I also suggest increasing marketing and awareness for the corporate memberships deal since most of the subsribers appear to be commuters to and from and work.
 
 ### 2. Lambda Architecture using Spark and HDFS
-In this project, I take on the roll of an ed tech firm employee. I've hypothetically created a service that
+In this project, I take on the role of an ed-tech firm employee. I've hypothetically created a service that
 delivers assessments, and now lots of different customers (e.g., Pearson) want
 to publish their assessments on it. The goal of this project is to get ready for data scientists
 who work for these customers to run queries on the data. In this project,I: 
