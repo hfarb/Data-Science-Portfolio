@@ -12,7 +12,7 @@ and therefore more power, we could be more certain about our results and be more
 
 ## About Repository
 - See the data directory for the dataset that we created for this project. For the data that our analysis was produced from, see the file: submission_data.csv
--See the code directory for the R code used to clean and process data and create visualizations and regressions. 
+- See the code directory for the R code used to clean and process data and create visualizations and regressions. 
 
 
 
