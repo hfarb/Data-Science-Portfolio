@@ -1,0 +1,602 @@
+---
+title: "241 Final Project"
+output: pdf_document
+---
+
+```{r}
+####################
+# IMPORT LIBRARIES #
+####################
+library(tidyverse)
+library(data.table)
+library(matrixStats)
+library(vtable)
+library(sandwich)
+library(lmtest)
+library(stargazer)
+library(pwr)
+library(vcd)
+library(knitr)
+library(ggplot2)
+library(ggthemes)
+library(kableExtra)
+library(corrplot)
+```
+
+## Data
+
+```{r}
+############
+# RAW DATA #
+############
+
+survey_data = read_csv("submission_data.csv")
+# survey_data = read_csv("./sample_data/w241_frozen_final_dataset.csv")
+
+# Converting data into a data table object
+df <- data.table(survey_data)
+```
+## Helper Functions 
+
+```{r}
+####################
+# HELPER FUNCTIONS #
+####################
+
+to_categorical <- function(column) {
+  #' This function converts likert scale questions to integers of respective value.
+  factors <- as.numeric(factor(column,
+                  # specifify the levels in the correct order:
+                  levels=c("Extremely unlikely", "Somewhat unlikely", "Neither likely nor unlikely", "Somewhat likely", "Extremely likely")))
+                  
+  return(factors)
+}
+
+
+drop_columns <- function(df) {
+  #` This function drops the columns specified within the function from a specified df.
+  return (
+    subset(
+      df,
+      select = -c(Progress, `Duration (in seconds)`, Status, IPAddress, Finished, StartDate, EndDate, RecordedDate, LocationLatitude, LocationLongitude, DistributionChannel, UserLanguage)
+    ))
+}
+
+
+map_to_condensed_variables <- function(dt) {
+  #condense race variable 
+  dt[!race %in% c("White","Asian","Hispanic or Latino","Black or African American","American Indian or Alaska Native"),race:= "Mixed/Other"]
+
+  #condense size bucket 
+  dt[size_bucket %in% c("18-24","26+"),size_bucket := "18+"]
+
+  #condense size bucket further, via condensing to either, above, below, or at the mode of the size bucket responses.
+  dt[,size_bucket_condensed := fcase(
+                          size_bucket == "0-4", "Below Modal Size",
+                          size_bucket == "6-10", "Modal Size",
+                          size_bucket %in% c("12-16","18+"), "Above Modal Size"
+                          )]
+
+  #condense size bucket even further to a binary variable, via condensing to either, above or below the mode of the size bucket responses.
+  dt[,size_bucket_condensed_binary := fcase(
+                            size_bucket %in% c("0-4","6-10"), "Modal and Below Modal Size",
+                            size_bucket %in% c("12-16","18+"), "Above Modal Size"
+                            )]
+
+  #condense self esteem rate questions 
+  dt[,self_esteem_rate := fcase(
+                          self_esteem_rate %in% c("Somewhat high","Very high"), "High",
+                          self_esteem_rate %in% c("Somewhat low","Very low"), "Low",
+                          self_esteem_rate == "Neutral", "Neutral"
+                          )]
+
+  #condense shopping style questions 
+  dt[,shopping_style:= fcase(
+                        shopping_style == "I shop once a month or less","shop less than once per month",
+                        shopping_style == "I shop 2-4 times a month", "shop 2-4 times per month",
+                        shopping_style %in% c("I shop 5-10 times a month","I shop more than 10 times a month"), "shop 5+ times per month"
+                        )]
+
+  #condense shop online questions 
+  dt[,shop_online := fcase(
+                          shop_online %in% c("I only shop online","I usually shop online"), "mostly online",
+                          shop_online %in% c("I occasionally shop online","I never shop online"), "mostly in person",
+                          shop_online == "It’s about equal, I shop online and in person", "about equal"
+                          )]
+
+  #condense shopping_preferences 
+  dt[,shopping_preferences := fcase(
+                          shopping_preferences %in% c("I know exactly what I need and spend little time browsing before making a purchase",
+                          "I don’t browse for pleasure"), "low browsing",
+                          shopping_preferences == "I browse until I find what I need and then make a purchase", "medium browsing",
+                          shopping_preferences %in% c("I spend the majority of my time browsing before making a purchase",
+                          "I often browse products without making a purchase"), "high browsing"
+                          )]
+                          
+  #condense shopping_exp_description
+  dt[,shopping_exp_description := fcase(
+                          shopping_exp_description %in% c("I am always satisfied by the fit of my garment",
+                          "I am usually satisfied by the fit of my garment"), "usually satisfied",
+                          shopping_exp_description == "Sometimes it fits, sometimes it doesn’t", "sometimes satisfied",
+                          shopping_exp_description %in% c("I am always frustrated with the size of my garment",
+                          "I am usually frustrated with the size of my garment"), "usually frustrated"
+                          )]
+
+  #condense size purchase confidence questions 
+  dt[,size_purchase_confidence := fcase(
+                          size_purchase_confidence %in% c("I am certain, I always order the right size","I am very confident, I usually order the right size"), "confident",
+                          size_purchase_confidence == "I’m not sure", "sometimes confident",
+                          size_purchase_confidence %in% c("I have no confidence in the fit, I always need to order a different size after the first purchase",
+                          "I am not very confident, I often order the wrong size"), "not confident"
+                          )]
+  return(dt)
+
+}
+
+
+riTest <- function(tbl, reps) {
+  riArray <- rep(NA, reps)
+  for (ri in 1:reps) {
+    riArray[ri] <- tbl[, .(mean_purchase_intent = mean(purchase_treat)),
+                       keyby = .(sample(treated))][, diff(mean_purchase_intent)]
+  }
+  return(riArray)
+}
+
+```
+
+## Data Cleaning
+```{r}
+############
+# CLEANING #
+############
+
+#Dropping Extraneous Columns
+master_df <- drop_columns(df)
+## Inspecting
+# head(master_df)
+# columnnames(master_df)
+```
+
+## Transformations
+
+```{r}
+###########################
+# FEATURE TRANSFORMATIONS #
+###########################
+
+# In this cell we are subsetting the columns that will be transformed into our outcome variables.
+
+# Purchase Intent Outcome Vars
+t_purchase_columns <- c("t1","t2","t3","t4","t5","t6","t7","t8","t9","t10","t11","t12","t13","t14","t15","t16","t17","t18","t19","t20")
+c_purchase_columns <- c("c1","c2","c3","c4","c5","c6","c7","c8","c9","c10","c11","c12","c13","c14","c15","c16","c17","c18","c19","c20")
+all_purchases <- c(t_purchase_columns,c_purchase_columns)
+
+# Click Count Outcome Vars
+t_click_count_columns <- c("t1_click_count","t2_click_count","t3_click_count","t4_click_count","t5_click_count","t6_click_count","t7_click_count","t8_click_count","t9_click_count","t10_click_count","t11_click_count","t12_click_count","t13_click_count","t14_click_count","t15_click_count","t16_click_count","t17_click_count","t18_click_count","t19_click_count","t20_click_count")
+c_click_count_columns <- c("c1_click_count","c2_click_count","c3_click_count","c4_click_count","c5_click_count","c6_click_count","c7_click_count","c8_click_count","c9_click_count","c10_click_count","c11_click_count","c12_click_count","c13_click_count","c14_click_count","c15_click_count","c16_click_count","c17_click_count","c18_click_count","c19_click_count","c20_click_count")
+all_click_counts <- c(t_click_count_columns,c_click_count_columns)
+
+#Page Submit Outcome Vars
+t_page_submits <- c("t1_page_submit","t2_page_submit","t3_page_submit","t4_page_submit","t5_page_submit","t6_page_submit","t7_page_submit",
+"t8_page_submit","t9_page_submit","t10_page_submit","t11_page_submit","t12_page_submit","t13_page_submit","t14_page_submit","t15_page_submit",
+"t16_page_submit","t17_page_submit","t18_page_submit","t19_page_submit","t20_page_submit")
+c_page_submits <- c("c1_page_submit","c2_page_submit","c3_page_submit","c4_page_submit","c5_page_submit","c6_page_submit","c7_page_submit",
+"c8_page_submit","c9_page_submit","c10_page_submit","c11_page_submit","c12_page_submit","c13_page_submit","c14_page_submit","c15_page_submit",
+"c16_page_submit","c17_page_submit","c18_page_submit","c19_page_submit","c20_page_submit")
+all_page_submits <- c(t_page_submits,c_page_submits)
+
+
+#all_click_counts
+#all_purchases
+```
+
+```{r}
+###########################
+# FEATURE TRANSFORMATIONS #
+###########################
+
+# In this cell we are mapping likert scale values to integers, creating the treatment column, and computing aggregate statistics for our outcome variables.
+
+#Creating integers for likert purchasing questions
+master_df[, (all_purchases):= lapply(.SD, to_categorical),.SDcols = all_purchases]
+
+#Adding the treated column (treatment = 1, control = 0)
+master_df[,treated:= ifelse(is.na(c1), 1, 0)]
+
+#Computing the row means for the treatment questions (model photo questions)
+master_df[treated == 1, purchase_treat:= rowMeans(.SD), .SDcols = t_purchase_columns]
+master_df[treated == 0, purchase_treat:= rowMeans(.SD), .SDcols = c_purchase_columns]
+
+#Computing the row means for our secondary outcome measure (comparing click count averages between the treatment and control groups)
+master_df[treated == 1, click_count_mean:= rowMeans(.SD), .SDcols = t_click_count_columns]
+master_df[treated == 0, click_count_mean:= rowMeans(.SD), .SDcols = c_click_count_columns]
+
+#Computing the row medians for our secondary outcome measure (comparing page submit medians between the treatment and control groups)
+master_df[treated == 1, page_submit_treat:= rowMedians(as.matrix(.SD)), .SDcols = t_page_submits]
+master_df[treated == 0, page_submit_treat:= rowMedians(as.matrix(.SD)), .SDcols = c_page_submits]
+
+#Inspecting
+# head(master_df)
+```
+
+```{r}
+#check on bucket randomization 
+master_df[,.N, by = .(size_bucket,treated)]
+```
+
+## Covariate Balance Inspection
+
+```{r}
+######################################
+# COVARIATE BALANCE CHECK (GRANULAR) #
+######################################
+
+#Clean the master data table by pulling only columns necessary for covariate balance check and regressions
+clean_dt <- master_df[,c(1:12,213:219)]
+
+#Create a table of covariates to simplify covariate balance check. Note: size free response is omitted - a separate analysis will be performed unless deleted.
+covariates_granular <- clean_dt[,c(2:7,9:14,16)]
+
+#Create Covariance Balance Table
+covariance_balance_table_granular <- sumtable(covariates_granular, group = "treated", group.test = TRUE, out = "return")
+
+covariance_balance_table_granular
+```
+
+```{r}
+#######################################
+# COVARIATE BALANCE CHECK (CONDENSED) #
+#######################################
+
+#Reduce Covariate Dimensionality
+clean_dt <- map_to_condensed_variables(clean_dt)
+
+#Create Condensed Covariates Table
+#Note: During dimensionality reduction, two new columns named, "size_bucket_condensed" and "size_bucket_condensed_binary" are added. 
+#The "size_bucket_condensed" column is representative of condensing the original "size_bucket" column to either, above, below, or at the mode of the size bucket responses.
+#The "size_bucket_condensed_binary" column is representative of condensing the original "size_bucket" column to a binary variable that is either, above or below the mode of the size bucket responses.
+
+covariates_condensed <- clean_dt[,c(2:7, 11:12, 20, 21, 13:14, 16)]
+
+#Create Covariance Balance Table
+covariate_balance_table_condensed <- sumtable(covariates_condensed, group = "treated", group.test = TRUE, out = "return")
+
+covariate_balance_table_condensed
+```
+## Regressions
+
+```{r}
+#######################################
+# MODEL 1 (BASELINE REGRESSION MODEL) #
+#######################################
+
+basic_model <- clean_dt[,lm(purchase_treat ~ treated)]
+basic_model$vcovHC_ <- vcovHC(basic_model)
+coeftest(basic_model, vcov. = basic_model$vcovHC_)
+```
+
+```{r}
+###########
+# MODEL 2 - Body Size Regressions #
+###########
+
+model_size <- clean_dt[,lm(purchase_treat ~ treated + as.factor(size_bucket))]
+model_size$vcovHC_ <- vcovHC(model_size)
+coeftest(model_size, vcov. = model_size$vcovHC_)
+
+model_size_hte <- clean_dt[,lm(purchase_treat ~ treated + as.factor(size_bucket) + treated * as.factor(size_bucket))]
+model_size_hte$vcovHC_ <- vcovHC(model_size_hte)
+coeftest(model_size_hte, vcov. = model_size_hte$vcovHC_)
+
+
+
+```
+
+```{r}
+##########################################
+# SECONDARY MODEL (PAGE SUBMIT DURATION) #
+##########################################
+
+#Run a basic regression on secondary outcome time to get started 
+secondary_model <- clean_dt[,lm(page_submit_treat ~ treated)]
+secondary_model$vcovHC_ <- vcovHC(secondary_model)
+coeftest(secondary_model, vcov. = secondary_model$vcovHC_)
+```
+
+```{r}
+#################################
+# SECONDARY MODEL (CLICK COUNT) #
+#################################
+
+#Run a basic regression on secondary outcome clicks to get started 
+secondary_model_clicks <- clean_dt[,lm(click_count_mean ~ treated)]
+secondary_model_clicks$vcovHC_ <- vcovHC(secondary_model_clicks)
+coeftest(secondary_model_clicks, vcov. = secondary_model_clicks$vcovHC_)
+```
+
+
+```{r}
+###########################################
+# SECONDARY MODEL (MODAL SIZES CONDENSED) #
+###########################################
+
+#Regression model with modal sizes 
+
+condensed_size_model <- clean_dt[, lm(purchase_treat ~ treated + as.factor(size_bucket_condensed))]
+condensed_size_model$vcovHC_ <- vcovHC(condensed_size_model)
+coeftest(condensed_size_model, vcov. = condensed_size_model$vcovHC_)
+
+condensed_size_model_hte <- clean_dt[, lm(purchase_treat ~ treated + as.factor(size_bucket_condensed) + treated * as.factor(size_bucket_condensed))]
+condensed_size_model_hte$vcovHC_ <- vcovHC(condensed_size_model_hte)
+coeftest(condensed_size_model_hte, vcov. = condensed_size_model_hte$vcovHC_)
+```
+
+```{r}
+##################################################
+# SECONDARY MODEL (MODAL SIZES CONDENSED BINARY) #
+##################################################
+
+#Regression model with modal sizes condensed to a binary variable of modal sizes
+
+condensed_size_model_binary <- clean_dt[, lm(purchase_treat ~ treated + as.factor(size_bucket_condensed_binary))]
+condensed_size_model_binary$vcovHC_ <- vcovHC(condensed_size_model_binary)
+coeftest(condensed_size_model_binary, vcov. = condensed_size_model_binary$vcovHC_)
+
+condensed_size_model_binary_hte <- clean_dt[, lm(purchase_treat ~ treated + as.factor(size_bucket_condensed_binary) + treated * as.factor(size_bucket_condensed_binary))]
+condensed_size_model_binary_hte$vcovHC_ <- vcovHC(condensed_size_model_binary_hte)
+coeftest(condensed_size_model_binary_hte, vcov. = condensed_size_model_binary_hte$vcovHC_)
+```
+
+```{r}
+#################################
+# SECONDARY MODEL (SELF-ESTEEM) #
+#################################
+
+self_model <- clean_dt[, lm(purchase_treat ~ treated + as.factor(self_esteem_rate))]
+self_model$vcovHC_ <- vcovHC(self_model)
+coeftest(self_model, vcov. = self_model$vcovHC_)
+
+self_model_hte <- clean_dt[, lm(purchase_treat ~ treated + as.factor(self_esteem_rate) + treated * as.factor(self_esteem_rate))]
+self_model_hte$vcovHC_ <- vcovHC(self_model_hte)
+coeftest(self_model_hte, vcov. = self_model_hte$vcovHC_)
+```
+
+```{r results = "asis"}
+####################
+# STANDARD ERRORS FOR REGRESSIONS #
+####################
+#standard errors
+rse1 <- sqrt(diag(basic_model$vcovHC_))
+rse2 <- sqrt(diag(model_size$vcovHC_))
+rse3 <- sqrt(diag(model_size_hte$vcovHC_))
+rse4 <- sqrt(diag(condensed_size_model$vcovHC_))
+rse5 <- sqrt(diag(condensed_size_model_hte$vcovHC_))
+rse6 <- sqrt(diag(condensed_size_model_binary$vcovHC_))
+rse7 <- sqrt(diag(condensed_size_model_binary_hte$vcovHC_))
+rse8 <- sqrt(diag(self_model$vcovHC_))
+rse9 <- sqrt(diag(self_model_hte$vcovHC_))
+```
+
+## Stargazer Regression Tables
+
+```{r results = "asis"}
+####################################################
+# TABLE1 : ALL BODY SIZE REGRESSIONS STARGAZER TABLE #
+####################################################
+#Stargazer Table 1: All Body Size Regressions 
+stargazer(basic_model, model_size, model_size_hte, type = "latex",
+          se = list(rse1,rse2, rse3),
+          model.numbers = FALSE,
+          add.lines = list(c('SE Type','Robust','Robust','Robust')),
+          column.labels = c("Treatment Effect","Size Buckets","Size Buckets with HTEs"),
+          covariate.labels = c("Treated","Size 6-10","Size 12-16","Size 18+","Treated * Size 6-10","Treated * Size 12-16",   "Treated * Size 18+","Intercept"),
+          order = c(1,4,2,3,7,5,6,8),
+          header = FALSE,
+          omit.stat=c("f", "ser"),
+          dep.var.labels = 'Purchase Intent',
+          title = 'All Size Buckets Regressions')
+```
+
+
+```{r results = "asis"}
+###########################################################
+# TABLE 2 : CONDENSED BODY SIZE REGRESSIONS STARGAZER TABLE #
+###########################################################
+
+#Stargazer table 2: Condensed Size Bucket Regressions
+stargazer(basic_model, condensed_size_model, condensed_size_model_hte,condensed_size_model_binary,condensed_size_model_binary_hte ,type = "latex",
+          se = list(rse1,rse4, rse5,rse6,rse7),
+          model.numbers = FALSE,
+          add.lines = list(c('SE Type','Robust','Robust','Robust','Robust','Robust')),
+          column.labels = c('\\shortstack{Treatment \\\\ Effect}', 
+                                    '\\shortstack{Condensed \\\\ Size Buckets}',
+                                    '\\shortstack{Condensed \\\\ Size Buckets \\\\ with HTEs}',
+                                    '\\shortstack{Binary \\\\ Size Bucket}',
+                                    '\\shortstack{Binary \\\\ Size Bucket \\\\ with HTEs}'),
+          covariate.labels = c("Treated","Below Modal Size","Modal Size","Treated * Below Modal Size","Treated * Modal Size", "Modal and Below Modal Size","Modal and Below Modal Size * Treated","Intercept"),
+          header = FALSE,
+          omit.stat=c("f", "ser"),
+          column.sep.width = "-5pt",
+          dep.var.labels = 'Purchase Intent',
+          title = 'Condensed Size Buckets Regressions')
+```
+
+```{r results = "asis"}
+####################################################
+# TABLE 3 : SELF-ESTEEM REGRESSIONS STARGAZER TABLE #3
+####################################################
+#stargazer table 3
+stargazer(basic_model, self_model,self_model_hte, type = "latex", 
+          se = list(rse1,rse8,rse9), 
+          model.numbers = FALSE,
+          add.lines = list(c('SE Type','Robust','Robust','Robust')),
+          column.labels = c("Treatment Effect","Self-Esteem",'\\shortstack{Self-Esteem  \\\\ with HTEs}'),
+          header = FALSE,
+          omit.stat=c("f", "ser"),
+          covariate.labels = c("Treated","Low Self-Esteem","Neutral Self-Esteem", "Low Self-Esteem * Treated", "Neutral Self-Esteem * Treated","Intercept"),
+          dep.var.labels = 'Purchase Intent',
+          title = 'Self-Esteem Regression')
+```
+
+## Relationship Between Body Size and Self-Esteem
+
+```{r}
+#Create ordered levels of size buckets and self-esteem for plots below
+clean_dt$size_bucket <- factor(clean_dt$size_bucket, levels = c("0-4", "6-10", "12-16", "18+"))
+clean_dt$self_esteem_rate <- factor(clean_dt$self_esteem_rate, levels = c("Low", "Neutral", "High"))
+```
+
+```{r}
+# Mosaic Plot
+## Size Bucket and Self Esteem Independence Relationship (Used instead of a correlation test, since these variables are categorial)
+mosaic <- mosaic(~ size_bucket + self_esteem_rate,
+        data = clean_dt,
+       direction = c("v", "h"),
+       main = "Self-Esteem and Body Size Mosaic Plot",
+       labeling_args = list(set_varnames = c(self_esteem_rate ="Self-Esteem", size_bucket="Body Size")),
+                                             shade = TRUE,legend=TRUE,gp = shading_hcl, gp_args = list(interpolate = c(1, 1.2)))
+mosaic
+
+```
+```{r}
+#Look at corrplot as an option for studying relationship between body size and self-esteem
+chi_sq_results <- chisq.test(table(clean_dt$size_bucket, clean_dt$self_esteem_rate))
+corrplot(chi_sq_results$residuals, is.cor = FALSE)
+```
+
+```{r}
+#Create tables of observed and expected chi-square results
+expected <- data.table(as.data.frame.matrix(round(chi_sq_results$expected,2)))
+observed <- data.table(as.data.frame.matrix(chi_sq_results$observed))
+observed[,type:= "Observed"]
+observed[, Size := c("0-4","6-10","12-16","18+")]
+setcolorder(observed, c("Size", "Low", "Neutral","High","type"))
+expected[,type:= "Expected"]
+expected[, Size := c("0-4","6-10","12-16","18+")]
+setcolorder(expected, c("Size", "Low", "Neutral","High","type"))
+
+#Look at new tables
+expected 
+observed
+```
+```{r}
+#Merge tables to create a summary table using kable in the next cell
+chi_dt <- merge(observed, expected, by='Size')
+chi_dt <- chi_dt[,c(1:4,6:8)]
+setnames(chi_dt,c('Low.x','Neutral.x','High.x','Low.y','Neutral.y','High.y'),c('Low','Neutral','High','Low','Neutral','High'), skip_absent=TRUE)
+
+#look at table that will be fed into kable
+chi_dt
+```
+
+
+
+
+# Fixed Effects Regressions/Chart for Different Outfits
+
+```{r}
+#Peek at master_df columns so I can use master_df later. Need master_df for individual outfit responses.
+head(master_df)
+```
+
+```{r}
+#Create master_dt, a table which has condensed variables created from master_df. This is necessary because I need t1-t20, and c1-20
+#for future work, but they are not included in clean_dt so I must use master_df.
+
+master_dt <-  map_to_condensed_variables(master_df)
+
+#check condensing worked - look at size bucket
+#master_dt[,.N, by = size_bucket]
+```
+
+
+```{r}
+#Create a table with outfit numbers and the averages for both the treatment version of the outfit and the control version of the outfit
+outfit_pairs <- data.table(
+  outfit_labels = all_purchases, 
+  averages = colMeans(master_dt[, ..all_purchases], na.rm = TRUE))
+outfit_pairs[,treated := fcase(grepl('t',outfit_labels) == TRUE, 1,default = 0)]
+outfit_pairs[,outfit_number:= fcase(
+  outfit_labels %in% c("t1","c1"), 1,
+  outfit_labels %in% c("t2","c2"), 2,
+  outfit_labels %in% c("t3","c3"), 3,
+  outfit_labels %in% c("t4","c4"), 4,
+  outfit_labels %in% c("t5","c5"), 5,
+  outfit_labels %in% c("t6","c6"), 6,
+  outfit_labels %in% c("t7","c7"), 7,
+  outfit_labels %in% c("t8","c8"), 8,
+  outfit_labels %in% c("t9","c9"), 9,
+  outfit_labels %in% c("t10","c10"), 10,
+  outfit_labels %in% c("t11","c11"), 11,
+  outfit_labels %in% c("t12","c12"), 12,
+  outfit_labels %in% c("t13","c13"), 13,
+  outfit_labels %in% c("t14","c14"), 14,
+  outfit_labels %in% c("t15","c15"), 15,
+  outfit_labels %in% c("t16","c16"), 16,
+  outfit_labels %in% c("t17","c17"), 17,
+  outfit_labels %in% c("t18","c18"), 18,
+  outfit_labels %in% c("t19","c19"), 19,
+  outfit_labels %in% c("t20","c20"), 20
+)]
+outfit_pairs
+```
+
+```{r}
+#Outfits table is different from outfit_pairs table because it shows Treatment and Control on headers which will be used for table
+#later. It also makes finding the differences between outfits much easier.
+treatment_averages <- outfit_pairs[,averages]
+outfits <- matrix(treatment_averages,ncol=2,byrow=FALSE)
+colnames(outfits) <- c("Treatment","Control")
+outfits <- data.table(outfits)
+outfits[, Outfit:= c(1:20)]
+setcolorder(outfits, c("Outfit", "Control", "Treatment"))
+outfits[, Difference:= Treatment - Control]
+outfits
+```
+
+```{r}
+#Make table of actual values for the outfits.
+outfits %>%
+  kbl(caption = "Table of Average Purchase Intent by Outfit") %>%
+  kable_classic(full_width = F, html_font = "Cambria")
+```
+
+
+# Create Final Kable Table for Body Size and Self-Esteem Relationship 
+```{r}
+kbl(chi_dt, caption = "Chi-Square Results for Self-Esteem and Body Size") %>%
+  kable_classic() %>%
+  add_header_above(c(" " = 1, "Observed" = 3, "Expected" = 3))%>%
+  add_header_above(c(" ", "Self-Esteem" = 6)) 
+```
+
+```{r}
+#Plot the average purchase intent by outfit and group.
+ggplot(outfit_pairs,aes(x=outfit_number,y=averages,fill=factor(treated)))+
+  geom_bar(stat="identity",position = position_dodge(0.7), width = 0.7)+
+  scale_fill_grey(start=0.8,end = 0.3,name="Group",
+                      breaks=c(0, 1),
+                      labels=c("Control", "Treatment"))+
+  labs(title ='Average Purchase Intent by Outfit and Group', x ='Outfit Number', y="Average Purchase Intent") +
+  scale_y_continuous(limits = c(0,4), breaks = seq(0,4,0.5), expand = expansion(mult = c(0, .1))) +
+  scale_x_continuous(breaks=1:20) +
+  theme_bw()+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+## Power Tests
+
+```{r}
+#Use power.t.test like professor suggested to see power for our experiment
+num_obs = clean_dt[,.N/2]
+ate <- clean_dt[, .(mean_purchase_intent = mean(purchase_treat)), keyby = treated][,diff(mean_purchase_intent)]
+sd <- clean_dt[,sd(purchase_treat)]
+power.t.test(n = num_obs, delta = ate, sd = sd, sig.level = 0.05, alternative = "two.sided",type = "two.sample",strict = TRUE)
+```
+
+```{r}
+#How many observations would we need to have a 0.8 power?
+power.t.test(power = 0.8, delta = ate, sd = sd, sig.level = 0.05, alternative = "two.sided",type = "two.sample",strict = TRUE)
+```
+
