@@ -17,8 +17,11 @@ Coursework Completed:
 * Experiment Design
 * Data Engineering
 * Machine Learning
-
-Coursework in Progress:
 * Data Visualization 
 * Experiments and Causal Inference 
 * Natural Language Processing with Deep Learning
+
+Coursework in Progress:
+* Capstone
+* Behind the Data: Humans and Values (Data Ethics Course)
+
