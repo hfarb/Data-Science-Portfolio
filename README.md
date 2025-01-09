@@ -4,11 +4,11 @@ Haley Farber
 
 Data Science Portfolio
 
-haleyfarber@berkeley.edu
+haley.s.farber@gmail.com
 
-Masters in Data Science (in progress - expected Fall 2021)
+Masters in Data Science 
 
-Univeristy of California, Berkeley
+University of California, Berkeley
 
 Coursework Completed:
 
@@ -20,8 +20,6 @@ Coursework Completed:
 * Data Visualization 
 * Experiments and Causal Inference 
 * Natural Language Processing with Deep Learning
-
-Coursework in Progress:
 * Capstone
 * Behind the Data: Humans and Values (Data Ethics Course)
 
